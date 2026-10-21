@@ -1,0 +1,397 @@
+# Sigma Computing POC — Evaluation Plan, Criteria & Rubric
+
+**Prepared for:** Sigma POC (Snowflake + Databricks connections), compared against MicroStrategy / Strategy ONE (MSTR)
+**Doc check date:** October 21, 2026 (Sigma features and beta status change often; re-check links before the readout)
+
+---
+
+## 0. Instructions for Claude (project context)
+
+- Use this file as the source of truth for the Sigma POC evaluation criteria, test steps, and scoring.
+- Every product claim in a readout must cite **official documentation**: Sigma (help.sigmacomputing.com), Snowflake (docs.snowflake.com), Databricks (docs.databricks.com), Strategy/MSTR (Strategy product help, community KB, release notes).
+- Always state whether a Sigma feature is **GA, public beta, or private beta**. Beta features score no higher than 2 unless the team accepts beta risk in writing.
+- Do not invent license prices. Sigma license cost is **vendor quote required**. Third-party estimates (Vendr, Querio, etc.) may be shown only as "indicative, not verified."
+- Keep answers precise and in tables when comparing tools.
+
+---
+
+## 1. Context
+
+| Item | Detail |
+|---|---|
+| Tool under evaluation | Sigma Computing — cloud BI with a spreadsheet-style UI. Has no data engine or import layer of its own. Every query runs live in the connected warehouse. |
+| Connections in scope | Snowflake connection; Databricks (Unity Catalog) connection |
+| Incumbent for comparison | MicroStrategy / Strategy ONE (Intelligent Cubes + live reports) |
+| Key constraint | No new tables, views, schemas, or catalogs in Snowflake or Databricks beyond approved source tables. Production may not allow table creation at all. |
+| POC goal 1 — Technical fit | Fits existing infrastructure (data sources, security, automation platforms) |
+| POC goal 2 — Functional fit | Meets business need (ease of use, SDLC, alignment with Data & Analytics delivery strategy) |
+
+---
+
+## 2. Doc-Verified Facts That Shape This POC
+
+These come from official Sigma docs. Each one drives a specific test below.
+
+| # | Fact | Impact on POC | Source |
+|---|---|---|---|
+| F1 | Tables **cannot be joined across connections** in Sigma. | No Snowflake ↔ Databricks join inside Sigma. | [Joins overview](https://help.sigmacomputing.com/docs/joins-overview) |
+| F2 | **Write access** (a writable schema/catalog) is required for **materialization, CSV uploads, input tables, and warehouse views**. | If prod disallows table creation, all four features are unavailable. Hard dependency. | [Connect to data sources](https://help.sigmacomputing.com/docs/connect-to-data-sources), [Set up write access](https://help.sigmacomputing.com/docs/connections) |
+| F3 | Materialization writes a copy of the data back to the warehouse as a table (or Snowflake dynamic table) in the Sigma-managed write-back schema. | Sigma's closest equivalent to an MSTR cube — but it creates warehouse objects. | [About materialization](https://help.sigmacomputing.com/docs/materialization) |
+| F4 | Materialization status: datasets and data model elements are **GA**; workbook elements are **public beta**. | Score workbook-level materialization as beta. | Same as F3 |
+| F5 | Materialization **fails** if data uses a system function, such as row-level security. Tagged workbook versions cannot be materialized. Controls targeting a materialized element query live data. | RLS + materialization do not combine. Version-tagged prod workbooks can't be materialized (data models can). | Same as F3 |
+| F6 | Materialization queries ignore the Sigma connection timeout and use the warehouse's own timeout. | Heavy transforms depend on warehouse timeout settings. | Same as F3 |
+| F7 | Caching order: browser cache → Alpha Query → warehouse query ID cache (Snowflake/BigQuery only) → universal result cache (beta) → re-query. Manual or scheduled refresh bypasses all caching. | Databricks has no query ID cache in Sigma; relies on live queries or beta universal cache. | [Caching and data freshness](https://help.sigmacomputing.com/docs/caching-and-data-freshness) |
+| F8 | On **OAuth** connections, the query ID cache and universal result cache are only used when the workbook **runs with service account credentials**. | Trade-off: per-user identity pass-through (OAuth) vs. caching/performance. Must test both. | Same as F7 |
+| F9 | Universal result cache is **public beta**, not supported for Snowflake (uses native cache), and needs an **external storage integration**. | For Databricks, caching needs a new cloud storage object — check if allowed. | [Manage universal result cache](https://help.sigmacomputing.com/docs/manage-universal-result-cache) |
+| F10 | RLS is set up with user attributes (`CurrentUserAttributeText`). Docs note the RLS filter can be modified by anyone viewing the table it is applied on; apply it only directly on an element. | Must prove viewers cannot bypass RLS. Consider warehouse-native RLS (UC row filters, Snowflake row access policies) via OAuth instead. | [Set up row-level security](https://help.sigmacomputing.com/docs/row-level-security) |
+| F11 | Databricks + OAuth is the method for per-user Unity Catalog permissions. Write access needs `MODIFY` and `CREATE TABLE` on dedicated write catalogs/schemas. | Confirms write access = new objects in UC. | [Connect to Databricks](https://help.sigmacomputing.com/docs/connect-to-databricks) |
+| F12 | Version tags support Dev/Test/Prod workflows, source swapping, and protected tags. Git integration is through the REST API. | SDLC is tag-based, not branch-based. | [Version tagging](https://help.sigmacomputing.com/docs/add-version-tags-to-workbooks-and-data-models) |
+| F13 | **Data models as code** (JSON/YAML via v2 API) is available. **Workbooks as code** is private beta. | CI/CD possible for data models; workbooks need beta access. | [Manage data models as code](https://help.sigmacomputing.com/docs/manage-data-models-as-code) |
+| F14 | Most exports are limited to **1 million rows** (CSV/Excel); PDF tables max 1,000 rows per table; cloud storage exports are not limited. | Check against large MSTR report exports/subscriptions. | [Download and export limitations](https://help.sigmacomputing.com/docs/download-export-and-upload-limitations) |
+| F15 | Snowflake semantic views can be browsed and queried in Sigma (**beta**, Oct 2025). Databricks lists Sigma among BI tools that can query UC metric views. | Option to reuse warehouse semantic layers. Verify current status. | [Sigma release notes Oct 10, 2025](https://help.sigmacomputing.com/changelog/2025-10-10), [UC metric views](https://docs.databricks.com/aws/en/metric-views/) |
+| F16 | AI: Ask Sigma renamed **Sigma Assistant** (Apr 2026); AI context for data models (beta); Sigma MCP server; AI providers include warehouse models, OpenAI, Azure OpenAI, Gemini, Amazon Bedrock (May 2026); AI columns for Databricks (Jun 2026). | AI features depend on the AI provider your org approves. | [Release notes Apr 17, 2026](https://help.sigmacomputing.com/changelog/2026-04-17), [Changelog](https://help.sigmacomputing.com/changelog) |
+| F17 | Audit log is a connection (Admin-only by default); usage dashboards and audit log hold **90 days** by default. | Check retention vs. compliance needs. | [Sigma usage data and logs](https://www.sigmacomputing.com/product-faq/how-to-use-sigmas-usage-data-and-logs) |
+| F18 | Pricing is custom, by license type (Creator vs. Viewer/Explorer), tier, and term. Not published. | License cost = vendor quote required. | Vendr / Querio (third-party, indicative only) |
+
+---
+
+## 3. Scoring Rubric
+
+| Score | Meaning |
+|---|---|
+| 5 | Fully meets the requirement natively, GA, no workaround |
+| 4 | Meets with minor configuration |
+| 3 | Partially meets; workaround needed |
+| 2 | Meets only via beta feature or significant workaround |
+| 1 | Does not meet |
+| N/A | Not testable in POC (e.g., vendor-withheld info, blocked by constraint) — document reason |
+
+- **Weighted score** = Σ (score × weight) / Σ (weights of scored items)
+- **Gate rule:** a score of 1 on any **Gate** criterion = POC fail, regardless of total.
+- **Beta cap:** a criterion met only through a beta feature scores max 2 unless beta risk is accepted in writing.
+- **Constraint rule:** a feature that needs write access is scored "Blocked by constraint" if prod disallows table creation.
+
+---
+
+## 4. Criteria Summary
+
+| # | Category | Weight | Gate |
+|---|---|---|---|
+| 1 | Connectivity & Authentication | 7% | Yes |
+| 2 | Data Modeling & Semantic Layer | 8% | No |
+| 3 | Cross-Source Capability | 5% | No |
+| 4 | Performance, Caching & Scalability | 10% | Yes |
+| 5 | Data Refresh / Load Time vs MSTR | 7% | No |
+| 6 | Heavy Transformation Query vs MSTR | 10% | Yes |
+| 7 | Security & Governance | 12% | Yes |
+| 8 | Self-Service Usability | 8% | No |
+| 9 | Reporting, Export & Distribution | 7% | No |
+| 10 | Writeback / Data Apps | 3% | No |
+| 11 | SDLC & Deployment | 8% | No |
+| 12 | Automation & APIs | 5% | No |
+| 13 | AI Capabilities | 4% | No |
+| 14 | Cost (TCO) | 6% | No |
+| | **Total** | **100%** | |
+
+---
+
+## 5. Criteria Detail
+
+### 1. Connectivity & Authentication (Gate) — 7%
+**Assess**
+- Snowflake connection: OAuth (role-scoped), key-pair, service account.
+- Databricks connection: OAuth (connection-level or org-level), PAT, service principal; SQL warehouse; Unity Catalog permissions.
+- Network: IP allowlist or Private Link.
+
+**How to test**
+1. Configure both connections with enterprise-approved auth.
+2. Browse only approved source tables. Confirm no write-access destination is required for read-only use.
+3. Log in as 2–3 test users under OAuth; confirm each sees only what their Snowflake role / UC grants allow.
+4. Repeat with service account; record visibility differences.
+
+**Pass**
+- Both connections work with approved auth and network setup. No new DB objects needed for read-only BI.
+
+---
+
+### 2. Data Modeling & Semantic Layer — 8%
+**Assess**
+- Sigma data models, relationships, reusable metrics, calculated columns, parameters, hierarchies.
+- Reuse of models across workbooks.
+- Use of warehouse semantic layers: Snowflake semantic views (beta), Databricks UC metric views.
+
+**How to test**
+1. Build the Loss Ratio model from the approved source tables on each connection.
+2. Define 3–5 shared metrics (Earned Premium, Incurred Loss, Loss Ratio, etc.) once; reuse them in two workbooks.
+3. If existing semantic views / metric views exist, query them from Sigma and compare results.
+4. Reconcile every metric against MSTR reference values.
+
+**Pass**
+- Metrics defined once and reused; values match MSTR exactly. Note beta status of semantic-view support.
+
+---
+
+### 3. Cross-Source Capability — 5%
+**Assess**
+- Combining Snowflake and Databricks data in one analysis (per F1, not supported natively).
+
+**How to test**
+1. Attempt a join between a Snowflake table and a Databricks table in one workbook; record the result.
+2. Document workaround options (e.g., Databricks Lakehouse Federation, Snowflake reading Iceberg tables) and whether each violates the no-new-objects constraint.
+3. Count the % of current MSTR reports that combine sources across both platforms.
+
+**Pass**
+- Expected: not supported natively. Score reflects workaround feasibility and the % of reports affected.
+
+---
+
+### 4. Performance, Caching & Scalability (Gate) — 10%
+**Assess**
+- Quality of Sigma-generated SQL (pushdown efficiency).
+- Dashboard load (cold/warm), filter and drill response.
+- Concurrency.
+- Caching behavior per connection (F7, F8, F9).
+- Query timeout settings.
+
+**How to test**
+1. Use production-like data volumes.
+2. Measure cold load, warm load, filter change, drill-down. Repeat 3 times; record averages.
+3. Concurrency: 10 / 25 / 50 users if possible (or scripted load).
+4. Run each test **twice**: (a) OAuth per-user identity, (b) service account credentials. Record cache hits in Sigma query history (execution path) and warehouse query history.
+5. Snowflake: check query ID cache hits and cache duration (TTL) setting.
+6. Databricks: check whether universal result cache (beta) is allowed (needs external storage integration).
+7. Review generated SQL in Snowflake Query History and Databricks Query History for full scans and filter pushdown.
+
+**Pass (agree targets with stakeholders)**
+- Example: warm load ≤ 5 s, cold ≤ 15 s, filter response ≤ 3 s at expected concurrency.
+- Generated SQL is efficient. Performance acceptable under the auth mode security requires.
+
+---
+
+### 5. Data Refresh / Load Time vs MSTR — 7%
+**Why:** Some MSTR Intelligent Cubes on large tables take a long time and a lot of data to load. Compare refresh effort and user response on the same source.
+
+**Key difference**
+| | MicroStrategy | Sigma |
+|---|---|---|
+| Data handling | Intelligent Cube imports query results into MSTR in-memory store; dashboards read from the cube | No import. Every interaction runs SQL in Snowflake/Databricks |
+| "Refresh" | Cube publish / republish (full or incremental) | Live query each time; or materialization refresh (needs write access, F2) |
+| Freshness | As fresh as the last cube publish | Current data on every query (unless cached/materialized) |
+| Cross-user reuse | Cube shared by all users | Browser cache is per user; warehouse cache depends on auth mode (F8) |
+
+**How to test**
+1. Pick 2–3 heavy MSTR cubes (largest rows/size, longest publish). Record row count, size, source tables.
+2. MSTR: record full publish time, incremental refresh time, and dashboard load time on the loaded cube.
+3. Sigma (same tables, same warehouse size):
+   - Live dashboard load (cold/warm) and filter/drill response.
+   - Materialization refresh time — **only if write access is allowed**; otherwise mark "Blocked by constraint."
+4. Run each test 3 times at similar warehouse load; average.
+5. Record warehouse compute for each run.
+
+**Results table**
+| Dataset | Rows / Size | MSTR full publish | MSTR incremental | MSTR dashboard load | Sigma live (cold/warm) | Sigma filter/drill | Sigma materialization refresh | Compute per run |
+|---|---|---|---|---|---|---|---|---|
+
+**Pass**
+- Sigma user response on the heavy dataset is at or better than the MSTR cube-backed dashboard, OR the trade-off (no refresh wait vs. slower live queries) is accepted by users.
+
+---
+
+### 6. Heavy Transformation Query vs MSTR (Gate) — 10%
+**Why:** Some MSTR reports/cubes depend on large, complex transforms (multi-pass SQL, Freeform SQL, level metrics). Prove Sigma can reproduce the logic, match results, and perform acceptably.
+
+**Key difference**
+| | MicroStrategy | Sigma |
+|---|---|---|
+| Logic engine | MSTR SQL engine generates multi-pass SQL; Freeform SQL supported | No engine of its own. Logic in Custom SQL, data models, or workbook formulas, pushed down to the warehouse |
+| When transform runs | Once at cube publish (cube-backed) | Every load, filter, or drill — unless materialized (blocked if no write access) |
+| Timeout | MSTR governing settings | Sigma connection timeout (live); warehouse timeout (materialization, F6) |
+
+**How to test**
+1. Pick 1–2 of the heaviest MSTR transform reports/cubes. Capture MSTR-generated SQL, pass count, rows returned, runtime.
+2. Rebuild the logic in Sigma (Custom SQL and/or data model). List anything that can't be expressed (level metrics, multi-pass behavior, cross-source joins).
+3. Compare logic parity, result accuracy (row counts + key totals), runtime (cold/warm/per-filter), generated SQL, and compute per run.
+4. Multiply Sigma per-query compute by expected daily interactions, since the transform reruns each time.
+5. Repeat 3 runs each; average.
+
+**Results table**
+| Report / Cube | Logic reproducible? | Results match? | MSTR runtime | Sigma cold | Sigma warm | Sigma per-filter | Compute per run | Est. daily compute |
+|---|---|---|---|---|---|---|---|---|
+
+**Pass**
+- 100% result match. Response time acceptable without materialization. Daily compute cost acceptable vs. the MSTR cube approach.
+
+---
+
+### 7. Security & Governance (Gate) — 12%
+**Assess**
+- RLS and column-level security in Sigma (user attributes, teams).
+- Warehouse-native security via OAuth (UC row filters/column masks, Snowflake row access / masking policies).
+- SSO, SCIM provisioning, account types and permissions.
+- Audit log and usage dashboards (90-day default retention, F17).
+- Export controls; AI data-sharing controls.
+
+**How to test**
+1. Configure RLS for 2–3 personas with Sigma user attributes. Verify each sees only allowed rows.
+2. **Bypass test:** log in as a viewer/explorer and try to remove or edit the RLS filter (F10). Confirm it is locked.
+3. Repeat with warehouse-native RLS through OAuth; confirm policies are enforced.
+4. Confirm RLS + materialization behavior (F5) and RLS + caching behavior (F8).
+5. Pull audit log entries for a test session; check retention against compliance needs.
+6. Test export permissions by account type.
+
+**Pass**
+- No data leakage in any persona or bypass attempt. Audit trail meets compliance requirements.
+
+---
+
+### 8. Self-Service Usability — 8%
+**Assess**
+- Spreadsheet interface for non-SQL business users; learning curve; chart building.
+
+**How to test**
+- Give 3–5 business users a scripted task (e.g., build Loss Ratio by Line of Business with a filter and a chart). Record time to complete and a 1–5 ease rating. Compare with the same task in MSTR.
+
+**Pass**
+- Majority complete the task without help within the target time.
+
+---
+
+### 9. Reporting, Export & Distribution — 7%
+**Assess**
+- Scheduled exports/subscriptions (email, Slack, cloud storage), PDF/Excel/CSV output, formatted/pixel-perfect reports, alerts.
+- Export limits (F14) vs. current MSTR subscription sizes.
+
+**How to test**
+1. List the top 10 MSTR subscriptions/exports by size and frequency.
+2. Rebuild 2–3 in Sigma; schedule them; compare formatting and row counts.
+3. Test one export above 1M rows (expect truncation unless sent to cloud storage).
+
+**Pass**
+- Critical MSTR distributions can be reproduced within Sigma limits.
+
+---
+
+### 10. Writeback / Data Apps — 3%
+**Assess**
+- Input tables, data entry, update/delete row actions, forms.
+
+**How to test**
+- Confirm whether a write-access destination is permitted. If not, mark "Blocked by constraint" (F2).
+
+**Pass**
+- Documented as available or blocked. Not a blocker unless the business requires writeback.
+
+---
+
+### 11. SDLC & Deployment — 8%
+**Assess**
+- Version tags (Dev/Test/Prod), protected tags and approvals, source swapping between environments.
+- Data models as code (GA via API) and workbooks as code (private beta).
+- Git/CI-CD integration via REST API.
+
+**How to test**
+1. Build in Dev; tag "Test"; swap the source to the Test connection/schema; promote to "Production"; roll back.
+2. Export a data model as YAML; commit to Git; change it; push it back via API.
+3. Ask Sigma for workbooks-as-code beta access; record status.
+
+**Pass**
+- Repeatable, auditable promotion without manual rebuild. Note beta items.
+
+---
+
+### 12. Automation & APIs — 5%
+**Assess**
+- REST API coverage: users, teams, workbooks, data models, permissions, exports, schedules, connections, version tags.
+- Fit with existing automation platforms (compare with current MSTR REST API automation).
+
+**How to test**
+- Automate 2–3 admin tasks (e.g., user provisioning, permission grants, scheduled export, connection sync) via API.
+
+**Pass**
+- Key admin tasks automatable without the UI.
+
+---
+
+### 13. AI Capabilities — 4%
+**Assess**
+- Sigma Assistant (formerly Ask Sigma), AI context for data models (beta), formula assistant, chart explanation, AI columns/warehouse AI functions, Sigma MCP server.
+- AI provider options vs. what the org approves (warehouse models, OpenAI, Azure OpenAI, Gemini, Bedrock).
+- Comparison with Databricks Genie and Snowflake Cortex Analyst.
+
+**How to test**
+- Ask the same 5 business questions in Sigma Assistant, Genie, and Cortex Analyst against the same data. Score accuracy, explainability, and governance.
+
+**Pass**
+- Sigma adds value beyond native Genie/Cortex using an approved AI provider. Verify Genie/Cortex claims against official docs.
+
+---
+
+### 14. Cost (TCO) — 6%
+**Cost components**
+| Component | Source | Status |
+|---|---|---|
+| Sigma license cost (Creator / Explorer / Viewer, tier, term) | Vendor quote | **Vendor quote required — may not be disclosed** |
+| Third-party price estimates | Vendr, Querio, etc. | Indicative only; mark as unverified |
+| Snowflake compute used by Sigma queries | Snowflake Query History / warehouse metering | Measure in POC |
+| Databricks compute (SQL warehouse DBUs) | Databricks system tables / billing | Measure in POC |
+| Extra compute from live re-querying vs. MSTR cubes | Categories 5 and 6 results | Measure in POC |
+| Storage for materialization / external cache (if allowed) | Warehouse / cloud storage billing | Measure or N/A |
+| Admin / support effort | Team estimate | Estimate |
+| Training / enablement | Team estimate | Estimate |
+| MSTR license savings | % of reports that can move (single-source, within limits) | Calculate |
+
+**How to test**
+1. Use a dedicated warehouse per connection for Sigma POC traffic; record compute during the performance tests.
+2. Project monthly compute for expected users and interactions (from Categories 4–6).
+3. Compare with current MSTR cost (license + Intelligence Server infrastructure + cube refresh compute).
+
+**Rubric note**
+- If license cost is not provided, score the license line **N/A — vendor-withheld** and base the cost score on measured compute plus estimates. State this clearly in the readout.
+
+---
+
+## 6. Results Template
+
+| # | Category | Weight | Score (1–5 / N/A) | Weighted | Evidence / Notes | GA / Beta | Blocked by constraint? | Doc link |
+|---|---|---|---|---|---|---|---|---|
+| 1 | Connectivity & Auth | 7% | | | | | | |
+| 2 | Data Modeling & Semantic Layer | 8% | | | | | | |
+| 3 | Cross-Source | 5% | | | | | | |
+| 4 | Performance, Caching & Scalability | 10% | | | | | | |
+| 5 | Refresh / Load Time vs MSTR | 7% | | | | | | |
+| 6 | Heavy Transform vs MSTR | 10% | | | | | | |
+| 7 | Security & Governance | 12% | | | | | | |
+| 8 | Self-Service Usability | 8% | | | | | | |
+| 9 | Reporting, Export & Distribution | 7% | | | | | | |
+| 10 | Writeback / Data Apps | 3% | | | | | | |
+| 11 | SDLC & Deployment | 8% | | | | | | |
+| 12 | Automation & APIs | 5% | | | | | | |
+| 13 | AI Capabilities | 4% | | | | | | |
+| 14 | Cost (TCO) | 6% | | | | | | |
+| | **Total** | **100%** | | | | | | |
+
+**Gate check:** Categories 1, 4, 6, 7 — any score of 1 = fail.
+
+---
+
+## 7. Open Questions for Sigma (ask the vendor)
+
+1. Is there any way to accelerate heavy queries (cube-like) **without** write access in the warehouse?
+2. Roadmap for cross-connection joins?
+3. GA timeline for workbook materialization, universal result cache, workbooks as code, and Snowflake semantic views.
+4. How to lock RLS filters so viewers can't modify them; recommended RLS pattern with OAuth.
+5. Caching options when OAuth per-user identity is required.
+6. Audit log retention beyond 90 days.
+7. License pricing by type and tier, concurrency limits, and support SLAs.
+8. Can the AI features run on an AI provider approved by our org (e.g., Bedrock or warehouse-native models)?
+
+---
+
+## 8. Final Recommendation Structure (for the readout)
+
+1. Executive summary: weighted score, gate results, go / no-go / conditional.
+2. Hard dependencies: write access, OAuth vs. caching, cross-source gap.
+3. MSTR vs. Sigma comparison table (Categories 5 and 6).
+4. Cost summary (measured compute + estimates; license = vendor quote).
+5. Risks: beta features, constraint-blocked features.
+6. Next steps.
